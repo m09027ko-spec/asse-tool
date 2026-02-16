@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>入院時サマリ評価システム</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const AdmissionSummaryEvaluator = () => {
+      const [allData, setAllData] = useState({});
+      const [selectedResident, setSelectedResident] = useState('');
+      const [currentEvaluation, setCurrentEvaluation] = useState({
+        residentName: '',
+        evaluatorName: '',
+        scores: {}
+      });
+      const [showResults, setShowResults] = useState(false);
+      const chartRef = useRef(null);
+      const chartInstance = useRef(null);
+
+      const competencies = [
+        {
+          id: 1,
+          name: '医学・医療における倫理性',
+          items: [
+            { id: '1-a', label: '意思決定のプロセス', description: 'DNARや蘇生に関する希望について、患者・家族の価値観や背景が記載されているか' },
+            { id: '1-b', label: 'プライバシーと同意', description: '情報収集・病状説明の同意範囲が明記されているか' }
+          ]
+        },
+        {
+          id: 2,
+          name: '医学知識と問題対応能力',
+          items: [
+            { id: '2-a', label: '鑑別診断の列挙', description: 'Most likelyとMust not missが区別して挙げられているか' },
+            { id: '2-b', label: '推論の言語化', description: '診断を疑う論理的根拠が言語化されているか' },
+            { id: '2-c', label: 'Safety Netの構築', description: '再評価のタイミングと観察ポイントが具体的に記載されているか' }
+          ]
+        },
+        {
+          id: 3,
+          name: '診療技能と患者ケア',
+          items: [
+            { id: '3-a', label: '現病歴の構成力', description: '時系列に沿って整理され、論理的な構成になっているか' },
+            { id: '3-b', label: '意図的な身体所見', description: 'Pertinent positives/negativesが記載されているか' },
+            { id: '3-c', label: 'プロブレムリストの網羅性', description: 'Social Issueや心理的課題がプロブレムとして挙げられているか' }
+          ]
+        },
+        {
+          id: 4,
+          name: 'コミュニケーション能力',
+          items: [
+            { id: '4-a', label: '患者のナラティブの引用', description: '患者自身の言葉や解釈が引用符などで記載されているか' },
+            { id: '4-b', label: '説明と理解度の記録', description: '相互対話のプロセスが記載されているか' }
+          ]
+        },
+        {
+          id: 5,
+          name: 'チーム医療の実践',
+          items: [
+            { id: '5-a', label: '情報の統合力', description: '他職種・他機関からの情報を統合しているか' },
+            { id: '5-b', label: '病棟チームへの発信', description: '看護師やリハビリスタッフへの具体的な指示が記載されているか' }
+          ]
+        },
+        {
+          id: 6,
+          name: '医療の質と安全の管理',
+          items: [
+            { id: '6-a', label: 'ハイリスク情報の明記', description: 'アレルギー歴、副作用歴、常用薬の確認結果が明記されているか' },
+            { id: '6-b', label: '病棟管理リスクの評価', description: '転倒・せん妄・誤嚥等のリスク評価と予防策が記載されているか' }
+          ]
+        },
+        {
+          id: 7,
+          name: '社会における医療の実践',
+          items: [
+            { id: '7-a', label: '社会歴の解像度', description: '退院調整の土台となる詳細な情報が記載されているか' },
+            { id: '7-b', label: '退院に向けた見通し', description: '退院先の見通しやMSW介入の必要性への言及があるか' }
+          ]
+        },
+        {
+          id: 8,
+          name: '科学的探究',
+          items: [
+            { id: '8-a', label: 'EBMの活用', description: '臨床予測ルール、ガイドライン、文献が引用されているか' },
+            { id: '8-b', label: '臨床的疑問の抽出', description: '診療上の不明点が思考のプロセスとして言語化されているか' }
+          ]
+        },
+        {
+          id: 9,
+          name: '生涯にわたって共に学ぶ姿勢',
+          items: [
+            { id: '9-a', label: '限界の認識と相談', description: '判断の限界を認識し、ネクストアクションが記載されているか' },
+            { id: '9-b', label: 'カルテの推敲', description: '他者が読むことを前提とした見やすいフォーマットに推敲されているか' }
+          ]
+        }
+      ];
+
+      useEffect(() => {
+        const stored = localStorage.getItem('admission-evaluations-by-resident');
+        if (stored) {
+          try {
+            const data = JSON.parse(stored);
+            setAllData(data);
+            // 最後に評価した研修医を選択
+            const residents = Object.keys(data);
+            if (residents.length > 0 && !selectedResident) {
+              setSelectedResident(residents[residents.length - 1]);
+            }
+          } catch (e) {
+            console.error('データ読み込みエラー:', e);
+          }
+        }
+      }, []);
+
+      useEffect(() => {
+        const evaluations = selectedResident ? (allData[selectedResident] || []) : [];
+        if (showResults && evaluations.length > 0 && chartRef.current) {
+          updateChart();
+        }
+        return () => {
+          if (chartInstance.current) {
+            chartInstance.current.destroy();
+            chartInstance.current = null;
+          }
+        };
+      }, [showResults, selectedResident, allData]);
+
+      const saveAllData = (newData) => {
+        localStorage.setItem('admission-evaluations-by-resident', JSON.stringify(newData));
+      };
+
+      const handleScoreChange = (itemId, score) => {
+        setCurrentEvaluation(prev => ({
+          ...prev,
+          scores: { ...prev.scores, [itemId]: score }
+        }));
+      };
+
+      const handleSubmit = () => {
+        if (!currentEvaluation.residentName.trim() || !currentEvaluation.evaluatorName.trim()) {
+          alert('研修医名と評価者名を入力してください');
+          return;
+        }
+
+        const allItems = competencies.flatMap(c => c.items);
+        const missingScores = allItems.filter(item => !currentEvaluation.scores[item.id]);
+        
+        if (missingScores.length > 0) {
+          alert('すべての項目を評価してください');
+          return;
+        }
+
+        const residentName = currentEvaluation.residentName.trim();
+        const newEvaluation = {
+          id: `eval_${Date.now()}`,
+          date: new Date().toISOString(),
+          evaluatorName: currentEvaluation.evaluatorName,
+          scores: currentEvaluation.scores
+        };
+
+        const updatedData = { ...allData };
+        if (!updatedData[residentName]) {
+          updatedData[residentName] = [];
+        }
+        updatedData[residentName].push(newEvaluation);
+
+        setAllData(updatedData);
+        saveAllData(updatedData);
+        setSelectedResident(residentName);
+
+        setCurrentEvaluation({ residentName: '', evaluatorName: '', scores: {} });
+        setShowResults(true);
+        alert('評価を保存しました！');
+      };
+
+      const calculateAverages = () => {
+        const evaluations = selectedResident ? (allData[selectedResident] || []) : [];
+        if (evaluations.length === 0) return {};
+        
+        const recent = evaluations.slice(-5);
+        const averages = {};
+        
+        competencies.forEach(comp => {
+          comp.items.forEach(item => {
+            const scores = recent
+              .map(evaluation => evaluation.scores[item.id])
+              .filter(s => s !== undefined);
+            
+            if (scores.length > 0) {
+              averages[item.id] = scores.reduce((a, b) => a + b, 0) / scores.length;
+            }
+          });
+        });
+        
+        return averages;
+      };
+
+      const getRadarData = () => {
+        const averages = calculateAverages();
+        
+        return competencies.map(comp => {
+          const compScores = comp.items.map(item => averages[item.id] || 0);
+          const compAvg = compScores.length > 0 
+            ? compScores.reduce((a, b) => a + b, 0) / compScores.length 
+            : 0;
+          
+          return {
+            label: comp.name,
+            score: Number(compAvg.toFixed(2))
+          };
+        });
+      };
+
+      const updateChart = () => {
+        if (!chartRef.current) return;
+
+        const radarData = getRadarData();
+        
+        if (chartInstance.current) {
+          chartInstance.current.destroy();
+        }
+
+        const ctx = chartRef.current.getContext('2d');
+        chartInstance.current = new Chart(ctx, {
+          type: 'radar',
+          data: {
+            labels: radarData.map(d => d.label),
+            datasets: [{
+              label: '現在の評価（直近5回平均）',
+              data: radarData.map(d => d.score),
+              backgroundColor: 'rgba(129, 140, 248, 0.2)',
+              borderColor: 'rgb(79, 70, 229)',
+              borderWidth: 2,
+              pointBackgroundColor: 'rgb(79, 70, 229)',
+              pointBorderColor: '#fff',
+              pointHoverBackgroundColor: '#fff',
+              pointHoverBorderColor: 'rgb(79, 70, 229)'
+            }]
+          },
+          options: {
+            scales: {
+              r: {
+                min: 0,
+                max: 5,
+                ticks: {
+                  stepSize: 1
+                }
+              }
+            },
+            plugins: {
+              legend: {
+                position: 'top',
+              }
+            }
+          }
+        });
+      };
+
+      const checkCompletion = () => {
+        const evaluations = selectedResident ? (allData[selectedResident] || []) : [];
+        if (evaluations.length < 5) {
+          return {
+            completed: false,
+            message: `あと${5 - evaluations.length}回の評価が必要です`,
+            progress: (evaluations.length / 5) * 100
+          };
+        }
+
+        const averages = calculateAverages();
+        const allItems = competencies.flatMap(c => c.items);
+        const allAbove3 = allItems.every(item => averages[item.id] >= 3);
+
+        if (allAbove3) {
+          return {
+            completed: true,
+            message: '合格基準を達成しました！',
+            progress: 100
+          };
+        } else {
+          const below3 = allItems.filter(item => averages[item.id] < 3);
+          return {
+            completed: false,
+            message: `${below3.length}項目がLevel 3未満です`,
+            progress: ((allItems.length - below3.length) / allItems.length) * 100,
+            weakItems: below3
+          };
+        }
+      };
+
+      const exportToCSV = () => {
+        const evaluations = selectedResident ? (allData[selectedResident] || []) : [];
+        if (evaluations.length === 0) {
+          alert('エクスポートするデータがありません');
+          return;
+        }
+
+        const headers = ['日時', '研修医名', '評価者名'];
+        const allItems = competencies.flatMap(c => c.items);
+        allItems.forEach(item => {
+          headers.push(item.id);
+        });
+
+        const rows = evaluations.map(evaluation => {
+          const row = [
+            new Date(evaluation.date).toLocaleString('ja-JP'),
+            selectedResident,
+            evaluation.evaluatorName
+          ];
+          allItems.forEach(item => {
+            row.push(evaluation.scores[item.id] || '');
+          });
+          return row.join(',');
+        });
+
+        const csv = [headers.join(','), ...rows].join('\n');
+        const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `入院時サマリ評価_${selectedResident}_${new Date().toLocaleDateString('ja-JP').replace(/\//g, '-')}.csv`;
+        link.click();
+      };
+
+      const resetData = () => {
+        if (selectedResident) {
+          if (window.confirm(`${selectedResident}さんのデータをすべて削除してもよろしいですか？`)) {
+            const updatedData = { ...allData };
+            delete updatedData[selectedResident];
+            setAllData(updatedData);
+            saveAllData(updatedData);
+            const residents = Object.keys(updatedData);
+            setSelectedResident(residents.length > 0 ? residents[0] : '');
+            alert('データを削除しました');
+          }
+        } else {
+          if (window.confirm('すべての研修医のデータを削除してもよろしいですか？')) {
+            localStorage.removeItem('admission-evaluations-by-resident');
+            setAllData({});
+            setSelectedResident('');
+            setCurrentEvaluation({ residentName: '', evaluatorName: '', scores: {} });
+            alert('すべてのデータをリセットしました');
+          }
+        }
+      };
+
+      const completion = checkCompletion();
+      const evaluations = selectedResident ? (allData[selectedResident] || []) : [];
+      const residentList = Object.keys(allData);
+
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50 py-8 px-4">
+          <div className="max-w-6xl mx-auto">
+            <div className="bg-white rounded-2xl shadow-lg p-8 mb-6">
+              <h1 className="text-3xl font-bold text-indigo-900 mb-2">
+                入院時サマリ 評価システム
+              </h1>
+              <p className="text-gray-600">研修医の入院時サマリ作成能力を9つのコンピテンシーで評価します</p>
+              
+              {/* 研修医選択 */}
+              {residentList.length > 0 && (
+                <div className="mt-6 bg-gray-50 rounded-xl p-4">
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    評価対象の研修医を選択
+                  </label>
+                  <select
+                    value={selectedResident}
+                    onChange={(e) => setSelectedResident(e.target.value)}
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-indigo-400 focus:outline-none transition-colors bg-white"
+                  >
+                    {residentList.map(name => (
+                      <option key={name} value={name}>
+                        {name} （評価{allData[name].length}回）
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              
+              {/* 進捗表示 */}
+              {selectedResident && (
+                <div className="mt-6 bg-indigo-50 rounded-xl p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <span className="text-sm text-indigo-700 font-semibold">評価回数（{selectedResident}）</span>
+                      <span className="ml-3 text-2xl font-bold text-indigo-900">
+                        {evaluations.length} / 5回
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <div className={`text-sm font-semibold ${completion.completed ? 'text-green-700' : 'text-indigo-700'}`}>
+                        {completion.message}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="w-full bg-indigo-200 rounded-full h-3">
+                    <div 
+                      className={`h-3 rounded-full transition-all duration-500 ${
+                        completion.completed ? 'bg-green-500' : 'bg-indigo-600'
+                      }`}
+                      style={{ width: `${completion.progress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3 mb-6">
+              <button
+                onClick={() => setShowResults(false)}
+                className={`px-6 py-3 rounded-xl font-semibold transition-all ${
+                  !showResults
+                    ? 'bg-white text-indigo-700 shadow-lg'
+                    : 'bg-white/60 text-gray-600 hover:bg-white/80'
+                }`}
+              >
+                新規評価
+              </button>
+              <button
+                onClick={() => setShowResults(true)}
+                className={`px-6 py-3 rounded-xl font-semibold transition-all ${
+                  showResults
+                    ? 'bg-white text-indigo-700 shadow-lg'
+                    : 'bg-white/60 text-gray-600 hover:bg-white/80'
+                }`}
+              >
+                結果・レーダーチャート
+              </button>
+            </div>
+
+            {!showResults ? (
+              <div className="bg-white rounded-2xl shadow-lg p-8">
+                <div className="grid grid-cols-2 gap-6 mb-8">
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      研修医名
+                    </label>
+                    <input
+                      type="text"
+                      value={currentEvaluation.residentName}
+                      onChange={(e) => setCurrentEvaluation(prev => ({
+                        ...prev,
+                        residentName: e.target.value
+                      }))}
+                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-indigo-400 focus:outline-none transition-colors"
+                      placeholder="例: 山田太郎"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      評価者名（指導医）
+                    </label>
+                    <input
+                      type="text"
+                      value={currentEvaluation.evaluatorName}
+                      onChange={(e) => setCurrentEvaluation(prev => ({
+                        ...prev,
+                        evaluatorName: e.target.value
+                      }))}
+                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-indigo-400 focus:outline-none transition-colors"
+                      placeholder="例: 佐藤花子"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-6">
+                  {competencies.map((comp) => (
+                    <div key={comp.id} className="border-2 border-indigo-100 rounded-2xl p-6 hover:border-indigo-200 transition-colors">
+                      <h3 className="text-lg font-bold text-indigo-900 mb-4 flex items-center">
+                        <span className="bg-indigo-100 text-indigo-700 w-8 h-8 rounded-full flex items-center justify-center mr-3 text-sm font-bold">
+                          {comp.id}
+                        </span>
+                        {comp.name}
+                      </h3>
+                      
+                      {comp.items.map((item) => (
+                        <div key={item.id} className="mb-6 last:mb-0 bg-gray-50 rounded-xl p-5">
+                          <div className="mb-3">
+                            <div className="font-semibold text-gray-800 mb-1">
+                              {item.id}. {item.label}
+                            </div>
+                            <div className="text-sm text-gray-600">
+                              {item.description}
+                            </div>
+                          </div>
+                          
+                          <div className="flex gap-3">
+                            {[1, 2, 3, 4, 5].map((level) => (
+                              <label
+                                key={level}
+                                className={`flex-1 cursor-pointer transition-all ${
+                                  currentEvaluation.scores[item.id] === level
+                                    ? 'transform scale-105'
+                                    : ''
+                                }`}
+                              >
+                                <input
+                                  type="radio"
+                                  name={item.id}
+                                  value={level}
+                                  checked={currentEvaluation.scores[item.id] === level}
+                                  onChange={() => handleScoreChange(item.id, level)}
+                                  className="sr-only"
+                                />
+                                <div className={`py-3 px-2 rounded-xl text-center font-bold transition-all ${
+                                  currentEvaluation.scores[item.id] === level
+                                    ? level >= 3
+                                      ? 'bg-green-500 text-white shadow-lg'
+                                      : 'bg-orange-500 text-white shadow-lg'
+                                    : 'bg-white border-2 border-gray-200 text-gray-600 hover:border-indigo-300'
+                                }`}>
+                                  Level {level}
+                                </div>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-8 flex gap-4">
+                  <button
+                    onClick={handleSubmit}
+                    className="flex-1 bg-indigo-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-indigo-700 transition-colors shadow-lg"
+                  >
+                    評価を保存
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {!selectedResident ? (
+                  <div className="bg-white rounded-2xl shadow-lg p-8 text-center">
+                    <p className="text-gray-500 text-lg">評価対象の研修医を選択してください</p>
+                    <p className="text-gray-400 mt-2">または、新規評価から評価を開始してください</p>
+                  </div>
+                ) : (
+                  <>
+                {evaluations.length > 0 && (
+                  <div className="bg-white rounded-2xl shadow-lg p-8">
+                    <h2 className="text-2xl font-bold text-indigo-900 mb-6">
+                      コンピテンシー別評価（直近5回の平均）
+                    </h2>
+                    <div className="max-w-2xl mx-auto">
+                      <canvas ref={chartRef}></canvas>
+                    </div>
+                  </div>
+                )}
+
+                {evaluations.length > 0 && (
+                  <div className="bg-white rounded-2xl shadow-lg p-8">
+                    <h2 className="text-2xl font-bold text-indigo-900 mb-6">
+                      項目別詳細（直近5回の平均）
+                    </h2>
+                    <div className="grid grid-cols-2 gap-4">
+                      {competencies.flatMap(c => c.items).map(item => {
+                        const avg = calculateAverages()[item.id] || 0;
+                        return (
+                          <div key={item.id} className={`p-4 rounded-xl border-2 ${
+                            avg >= 3 ? 'border-green-200 bg-green-50' : 'border-orange-200 bg-orange-50'
+                          }`}>
+                            <div className="flex justify-between items-center">
+                              <span className="font-semibold text-gray-800">{item.id}. {item.label}</span>
+                              <span className={`text-xl font-bold ${
+                                avg >= 3 ? 'text-green-700' : 'text-orange-700'
+                              }`}>
+                                {avg.toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <div className="bg-white rounded-2xl shadow-lg p-8">
+                  <h2 className="text-2xl font-bold text-indigo-900 mb-6">評価履歴（{selectedResident}）</h2>
+                  {evaluations.length === 0 ? (
+                    <p className="text-gray-500 text-center py-8">まだ評価データがありません</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {evaluations.slice().reverse().map((evaluation, index) => (
+                        <div key={evaluation.id} className="border-2 border-gray-200 rounded-xl p-4 hover:border-indigo-300 transition-colors">
+                          <div className="flex justify-between items-center">
+                            <div>
+                              <span className="font-semibold text-gray-800">
+                                #{evaluations.length - index}
+                              </span>
+                              <span className="ml-4 text-gray-600">
+                                評価者: {evaluation.evaluatorName}
+                              </span>
+                            </div>
+                            <div className="text-sm text-gray-500">
+                              {new Date(evaluation.date).toLocaleString('ja-JP')}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex gap-4">
+                  <button
+                    onClick={exportToCSV}
+                    className="flex-1 bg-green-600 text-white py-4 rounded-xl font-bold hover:bg-green-700 transition-colors shadow-lg disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    disabled={!selectedResident || evaluations.length === 0}
+                  >
+                    CSVエクスポート（{selectedResident || '未選択'}）
+                  </button>
+                  <button
+                    onClick={resetData}
+                    className="px-8 bg-red-500 text-white py-4 rounded-xl font-bold hover:bg-red-600 transition-colors shadow-lg disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    disabled={!selectedResident}
+                  >
+                    {selectedResident ? `${selectedResident}のデータ削除` : 'データ削除'}
+                  </button>
+                </div>
+                </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<AdmissionSummaryEvaluator />);
+  </script>
+</body>
+</html>
